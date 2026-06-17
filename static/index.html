@@ -451,27 +451,66 @@
     <div class="container">
         <h1>🎬 TikTok API Tester</h1>
 
-        <!-- Config -->
-        <div class="card">
-            <h2>⚙️ Cấu hình</h2>
-            <details class="instruction-box">
-                <summary>💡 Cách lấy ms_token thủ công (bấm để mở)</summary>
-                <ol>
-                    <li>Mở tab ẩn danh và vào <b>tiktok.com</b>.</li>
-                    <li>Bấm <b>F12</b> → tab <b>Application</b> → <b>Cookies</b> → <b>https://www.tiktok.com</b>.</li>
-                    <li>Tìm hàng <b>msToken</b>, copy toàn bộ giá trị ở cột <b>Value</b>.</li>
-                    <li>Dán vào ô bên dưới.</li>
-                </ol>
-            </details>
-            <div class="form-group">
-                <label>ms_token</label>
-                <div class="token-row">
-                    <input type="text" id="ms_token" placeholder="Dán msToken vào đây, hoặc bấm nút bên phải để tự lấy..." style="flex:1; font-family: monospace; font-size: 12px;">
-                    <button class="teal" onclick="autoGetMsToken()" id="btnAutoToken">🔄 Tự động lấy Token</button>
+        <!-- TikTok Account Panel -->
+        <div class="card" id="tiktokAccountCard">
+            <h2>🔗 Tài khoản TikTok</h2>
+
+            <!-- State: Chưa kết nối -->
+            <div id="stateNotConnected">
+                <p style="color: var(--text-muted); font-size: 14px; margin-bottom: 16px; line-height: 1.6;">
+                    Kết nối tài khoản TikTok của bạn để tự động lấy <code style="background:#222;padding:2px 6px;border-radius:4px;color:var(--teal);">ms_token</code> và hiển thị thông tin kênh cá nhân.
+                </p>
+                <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                    <button class="teal" onclick="loginAndSync()" id="btnLoginSync">🚀 Đăng nhập & Đồng bộ TikTok</button>
+                    <button class="outline" onclick="toggleManualSection()">✏️ Nhập ms_token thủ công</button>
                 </div>
-                <div id="tokenStatus"></div>
+
+                <!-- Manual section (ẩn mặc định) -->
+                <div id="manualSection" style="display:none; margin-top:16px; padding:16px; background:var(--surface2); border:1px solid var(--border); border-radius:12px;">
+                    <details class="instruction-box" style="margin-bottom:12px;">
+                        <summary>💡 Cách lấy ms_token thủ công</summary>
+                        <ol>
+                            <li>Mở tab ẩn danh → vào <b>tiktok.com</b></li>
+                            <li>Bấm <b>F12</b> → <b>Application</b> → <b>Cookies</b> → <b>https://www.tiktok.com</b></li>
+                            <li>Tìm hàng <b>msToken</b> → copy giá trị ở cột <b>Value</b></li>
+                        </ol>
+                    </details>
+                    <div style="display:flex;gap:10px;align-items:center;">
+                        <input type="text" id="ms_token" placeholder="Dán msToken vào đây..." style="flex:1; font-family:monospace; font-size:12px;">
+                        <button class="teal" onclick="autoGetMsToken()" id="btnAutoToken">🔄 Tự lấy nhanh</button>
+                    </div>
+                    <div id="tokenStatus"></div>
+                </div>
+            </div>
+
+            <!-- State: Đang chờ đăng nhập -->
+            <div id="stateWaiting" style="display:none;">
+                <div style="background:rgba(32,213,236,0.07); border:1px solid rgba(32,213,236,0.3); border-radius:12px; padding:20px; text-align:center;">
+                    <div class="loader-spinner" style="border-top-color:var(--teal); margin:0 auto 12px;"></div>
+                    <div style="font-size:15px; font-weight:700; color:var(--teal); margin-bottom:8px;">Cửa sổ TikTok đang mở...</div>
+                    <div style="font-size:13px; color:#aaa; line-height:1.6;">
+                        Vui lòng <b style="color:#fff;">đăng nhập TikTok</b> trong cửa sổ vừa xuất hiện.<br>
+                        Hệ thống sẽ tự động phát hiện khi bạn đăng nhập xong.
+                    </div>
+                    <div style="margin-top:14px; font-size:12px; color:#555;">
+                        ⏳ Thời gian chờ tối đa: 3 phút
+                    </div>
+                    <button class="outline" onclick="cancelSync()" style="margin-top:16px; font-size:12px; padding:8px 16px;">✕ Hủy</button>
+                </div>
+            </div>
+
+            <!-- State: Đã kết nối thành công -->
+            <div id="stateConnected" style="display:none;">
+                <div id="connectedProfileCard"></div>
+                <div style="display:flex; gap:10px; margin-top:14px; flex-wrap:wrap;">
+                    <button onclick="reloadConnectedProfile()" class="outline" style="font-size:12px; padding:8px 14px;">🔄 Làm mới</button>
+                    <button onclick="disconnectTikTok()" class="outline" style="font-size:12px; padding:8px 14px; color:#ff6b6b; border-color:rgba(255,107,107,0.3);">🔓 Ngắt kết nối</button>
+                </div>
             </div>
         </div>
+
+        <!-- Config (hidden ms_token field for API calls) -->
+        <input type="hidden" id="ms_token" value="">
 
         <!-- Actions -->
         <div class="card">
@@ -555,42 +594,182 @@
     </div>
 
     <script>
-        const getMsToken = () => document.getElementById('ms_token').value;
+        const getMsToken = () => {
+            // Ưu tiên lấy từ hidden field (đã đồng bộ TikTok)
+            const hidden = document.getElementById('ms_token');
+            return hidden ? hidden.value : '';
+        };
         const getUsername = () => document.getElementById('username').value.trim();
         const getHashtag = () => document.getElementById('hashtag_query').value.replace(/^#/, '').trim();
         const getSoundId = () => document.getElementById('sound_id').value.trim();
         const getVideoUrl = () => document.getElementById('video_url').value.trim();
         const getSearchQuery = () => document.getElementById('search_query').value.trim();
 
-        // -------- Auto fetch ms_token --------
+        // -------- TikTok Account Sync --------
+        let _syncAborted = false;
+
+        function setState(state) {
+            document.getElementById('stateNotConnected').style.display = state === 'notConnected' ? 'block' : 'none';
+            document.getElementById('stateWaiting').style.display = state === 'waiting' ? 'block' : 'none';
+            document.getElementById('stateConnected').style.display = state === 'connected' ? 'block' : 'none';
+        }
+
+        function toggleManualSection() {
+            const el = document.getElementById('manualSection');
+            el.style.display = el.style.display === 'none' ? 'block' : 'none';
+        }
+
+        function renderConnectedProfile(data) {
+            const u = data.user_info?.userInfo?.user;
+            const s = data.user_info?.userInfo?.stats;
+            const username = data.tiktok_username || (u?.uniqueId);
+            const tiktokLink = `https://www.tiktok.com/@${username}`;
+
+            let profileHTML = '';
+            if (u && s) {
+                profileHTML = `
+                <div style="display:flex; align-items:center; gap:20px; flex-wrap:wrap;">
+                    <div style="position:relative; flex-shrink:0;">
+                        <img src="${u.avatarLarger || u.avatarMedium || u.avatarThumb}"
+                             style="width:80px;height:80px;border-radius:50%;border:3px solid var(--teal);object-fit:cover;"
+                             onerror="this.outerHTML='<div style=&quot;width:80px;height:80px;border-radius:50%;border:3px solid var(--teal);background:linear-gradient(135deg,#fe2c55,#20d5ec);display:flex;align-items:center;justify-content:center;font-size:28px;&quot;>👤</div>'">
+                        ${u.verified ? '<div style="position:absolute;bottom:2px;right:2px;background:var(--teal);color:#000;border-radius:50%;width:20px;height:20px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;border:2px solid var(--surface);">✓</div>' : ''}
+                    </div>
+                    <div style="flex:1; min-width:200px;">
+                        <div style="display:flex;align-items:center;gap:8px;margin-bottom:2px;">
+                            <span style="font-size:18px;font-weight:800;color:#fff;">${u.nickname}</span>
+                            ${u.verified ? '<span style="color:var(--teal);font-size:12px;font-weight:700;">✓ Đã xác minh</span>' : ''}
+                        </div>
+                        <div style="font-size:13px;color:var(--text-muted);margin-bottom:10px;">@${u.uniqueId}</div>
+                        <div style="display:flex;gap:20px;flex-wrap:wrap;">
+                            <div style="text-align:center;"><div style="font-size:16px;font-weight:800;color:#fff;">${formatNumber(s.followerCount)}</div><div style="font-size:11px;color:#555;text-transform:uppercase;letter-spacing:0.5px;">Followers</div></div>
+                            <div style="text-align:center;"><div style="font-size:16px;font-weight:800;color:#fff;">${formatNumber(s.heartCount || s.diggCount)}</div><div style="font-size:11px;color:#555;text-transform:uppercase;letter-spacing:0.5px;">Lượt thích</div></div>
+                            <div style="text-align:center;"><div style="font-size:16px;font-weight:800;color:#fff;">${formatNumber(s.videoCount)}</div><div style="font-size:11px;color:#555;text-transform:uppercase;letter-spacing:0.5px;">Video</div></div>
+                        </div>
+                    </div>
+                    <a href="${tiktokLink}" target="_blank" style="background:rgba(32,213,236,0.1);border:1px solid rgba(32,213,236,0.4);color:var(--teal);padding:8px 16px;border-radius:8px;text-decoration:none;font-size:13px;font-weight:600;">
+                        Mở kênh TikTok ↗
+                    </a>
+                </div>`;
+            } else {
+                // Chỉ có username, không có profile đầy đủ
+                profileHTML = `
+                <div style="display:flex;align-items:center;gap:16px;">
+                    <div style="width:60px;height:60px;border-radius:50%;border:3px solid var(--teal);background:linear-gradient(135deg,#fe2c55,#20d5ec);display:flex;align-items:center;justify-content:center;font-size:24px;">👤</div>
+                    <div>
+                        <div style="font-size:16px;font-weight:700;color:#fff;">@${username}</div>
+                        <div style="font-size:12px;color:var(--text-muted);">Đã xác minh • ms_token hợp lệ</div>
+                    </div>
+                    <a href="${tiktokLink}" target="_blank" style="background:rgba(32,213,236,0.1);border:1px solid rgba(32,213,236,0.4);color:var(--teal);padding:8px 16px;border-radius:8px;text-decoration:none;font-size:13px;font-weight:600;">Mở kênh ↗</a>
+                </div>`;
+            }
+
+            document.getElementById('connectedProfileCard').innerHTML = `
+                <div style="background:var(--surface2);border:1px solid var(--border);border-radius:14px;padding:20px;">
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;">
+                        <span style="display:inline-block;width:8px;height:8px;background:#22c55e;border-radius:50%;"></span>
+                        <span style="font-size:12px;font-weight:600;color:#22c55e;text-transform:uppercase;letter-spacing:0.5px;">Đã kết nối</span>
+                    </div>
+                    ${profileHTML}
+                </div>`;
+        }
+
+        async function loginAndSync() {
+            _syncAborted = false;
+            setState('waiting');
+            try {
+                const res = await fetch('/api/login_and_sync');
+                const data = await res.json();
+                if (_syncAborted) return;
+                if (data.status === 'success' && data.ms_token) {
+                    document.getElementById('ms_token').value = data.ms_token;
+                    renderConnectedProfile(data);
+                    setState('connected');
+                    // Tự động điền username vào ô tìm kiếm nếu có
+                    if (data.tiktok_username) {
+                        const unameInput = document.getElementById('username');
+                        if (unameInput) unameInput.value = data.tiktok_username;
+                    }
+                } else {
+                    setState('notConnected');
+                    alert('❌ ' + (data.detail || 'Không thể đồng bộ. Vui lòng thử lại.'));
+                }
+            } catch (err) {
+                if (!_syncAborted) {
+                    setState('notConnected');
+                    alert('❌ Lỗi kết nối: ' + err.message);
+                }
+            }
+        }
+
+        function cancelSync() {
+            _syncAborted = true;
+            setState('notConnected');
+        }
+
+        async function disconnectTikTok() {
+            await fetch('/api/synced_session', { method: 'DELETE' });
+            document.getElementById('ms_token').value = '';
+            document.getElementById('connectedProfileCard').innerHTML = '';
+            setState('notConnected');
+        }
+
+        async function reloadConnectedProfile() {
+            try {
+                const res = await fetch('/api/synced_session');
+                const data = await res.json();
+                if (data.status === 'success') {
+                    document.getElementById('ms_token').value = data.ms_token || '';
+                    renderConnectedProfile(data);
+                    setState('connected');
+                }
+            } catch(e) {}
+        }
+
+        // Kiểm tra session cũ khi load trang
+        window.addEventListener('DOMContentLoaded', async () => {
+            try {
+                const res = await fetch('/api/synced_session');
+                const data = await res.json();
+                if (data.status === 'success' && data.ms_token) {
+                    document.getElementById('ms_token').value = data.ms_token;
+                    renderConnectedProfile(data);
+                    setState('connected');
+                    if (data.tiktok_username) {
+                        const unameInput = document.getElementById('username');
+                        if (unameInput) unameInput.value = data.tiktok_username;
+                    }
+                }
+            } catch(e) {}
+        });
+
+        // -------- Quick ms_token (manual fallback) --------
         async function autoGetMsToken() {
             const btn = document.getElementById('btnAutoToken');
             const statusDiv = document.getElementById('tokenStatus');
             const inputField = document.getElementById('ms_token');
-
             btn.disabled = true;
             btn.innerText = "⏳ Đang lấy...";
             statusDiv.className = 'loading';
             statusDiv.style.display = 'block';
-            statusDiv.innerText = "Hệ thống đang mở trình duyệt ẩn danh, vui lòng chờ 3-5 giây...";
-
+            statusDiv.innerText = "Đang mở trình duyệt ẩn danh, chờ 3-5 giây...";
             try {
                 const response = await fetch('/api/get_ms_token');
                 const data = await response.json();
                 if (data.status === 'success' && data.ms_token) {
                     inputField.value = data.ms_token;
                     statusDiv.className = 'success';
-                    statusDiv.innerText = `✅ Lấy ms_token thành công! Token: ${data.ms_token.substring(0, 30)}...`;
+                    statusDiv.innerText = `✅ Lấy nhanh thành công! Token: ${data.ms_token.substring(0, 30)}...`;
                 } else {
                     statusDiv.className = 'error';
-                    statusDiv.innerText = "❌ Lỗi: " + (data.detail || "Không thể lấy token.");
+                    statusDiv.innerText = "❌ " + (data.detail || "Không thể lấy token.");
                 }
             } catch (error) {
                 statusDiv.className = 'error';
                 statusDiv.innerText = "❌ Lỗi kết nối: " + error.message;
             } finally {
                 btn.disabled = false;
-                btn.innerText = "🔄 Tự động lấy Token";
+                btn.innerText = "🔄 Tự lấy nhanh";
             }
         }
 

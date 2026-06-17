@@ -1,9 +1,12 @@
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from TikTokApi import TikTokApi
 from playwright.async_api import async_playwright
 import re, os, asyncio
+
+# Global state: store the latest synced TikTok session
+_synced_session: dict = {}
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -27,7 +30,8 @@ async def make_session(api: TikTokApi, ms_token: str | None):
 # Auto-fetch ms_token via Playwright
 # ─────────────────────────────────────
 @app.get("/api/get_ms_token")
-async def fetch_ms_token():
+async def fetch_ms_token_quick():
+    """Lấy ms_token nhanh không cần login (ẩn danh - có thể bị giới hạn)"""
     try:
         ms_token = None
         async with async_playwright() as p:
@@ -42,12 +46,130 @@ async def fetch_ms_token():
                     ms_token = cookie["value"]
                     break
             await browser.close()
-
         if ms_token:
             return {"status": "success", "ms_token": ms_token}
-        return {"status": "error", "detail": "Không tìm thấy msToken. TikTok có thể đang chặn request."}
+        return {"status": "error", "detail": "Không tìm thấy msToken."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/login_and_sync")
+async def login_and_sync():
+    """
+    Mở cửa sổ trình duyệt TikTok thật để người dùng đăng nhập.
+    Sau khi đăng nhập thành công:
+    - Lấy msToken từ cookies
+    - Tự động điều hướng đến /me để phát hiện username của chính họ
+    - Trả về { ms_token, tiktok_username, user_info }
+    """
+    try:
+        result = {}
+        async with async_playwright() as p:
+            # Mở browser CÓ giao diện (headless=False) để người dùng tương tác
+            browser = await p.chromium.launch(
+                headless=False,
+                args=["--no-sandbox", "--start-maximized"]
+            )
+            context = await browser.new_context(no_viewport=True)
+            page = await context.new_page()
+
+            # Đến trang đăng nhập
+            await page.goto("https://www.tiktok.com/login", wait_until="domcontentloaded")
+
+            # Chờ tối đa 3 phút để người dùng đăng nhập
+            # Phát hiện đăng nhập thành công khi cookie sid_tt xuất hiện
+            print("[TikTok Sync] Đang chờ người dùng đăng nhập...")
+            logged_in = False
+            for _ in range(180):  # 180 * 1s = 3 phút
+                await asyncio.sleep(1)
+                cookies = await context.cookies()
+                cookie_names = {c["name"] for c in cookies}
+                # sid_tt chỉ xuất hiện khi đã đăng nhập thành công
+                if "sid_tt" in cookie_names:
+                    logged_in = True
+                    print("[TikTok Sync] Phát hiện đăng nhập thành công!")
+                    break
+
+            if not logged_in:
+                await browser.close()
+                return {"status": "error", "detail": "Hết thời gian chờ (3 phút). Vui lòng thử lại."}
+
+            # Chờ thêm 2 giây để TikTok ghi đầy đủ cookies
+            await asyncio.sleep(2)
+
+            # Lấy msToken
+            cookies = await context.cookies()
+            for c in cookies:
+                if c["name"] == "msToken":
+                    result["ms_token"] = c["value"]
+                if c["name"] == "tt_chain_token":
+                    result["tt_chain_token"] = c["value"]
+
+            # Điều hướng đến /me để TikTok redirect về trang cá nhân
+            # URL sẽ đổi thành /@username
+            await page.goto("https://www.tiktok.com/me", wait_until="domcontentloaded")
+            await asyncio.sleep(3)
+
+            final_url = page.url
+            print(f"[TikTok Sync] URL sau redirect: {final_url}")
+
+            # Trích xuất username từ URL (dạng /@username)
+            username_match = re.search(r'tiktok\.com/@([^/?]+)', final_url)
+            if username_match:
+                result["tiktok_username"] = username_match.group(1)
+
+            # Nếu không lấy được từ URL, thử đọc từ DOM
+            if "tiktok_username" not in result:
+                try:
+                    handle_el = await page.query_selector('[data-e2e="user-page-header-nickname"]')
+                    if not handle_el:
+                        handle_el = await page.query_selector('[data-e2e="user-subtitle"]')
+                    if handle_el:
+                        text = await handle_el.inner_text()
+                        result["tiktok_username"] = text.replace("@", "").strip()
+                except Exception:
+                    pass
+
+            await browser.close()
+
+            # Nếu có username, fetch thêm thông tin profile
+            if "tiktok_username" in result and "ms_token" in result:
+                try:
+                    async with TikTokApi() as api:
+                        await api.create_sessions(
+                            ms_tokens=[result["ms_token"]],
+                            num_sessions=1,
+                            sleep_after=3
+                        )
+                        user_data = await api.user(result["tiktok_username"]).info()
+                        result["user_info"] = user_data
+                except Exception as e:
+                    print(f"[TikTok Sync] Không fetch được profile: {e}")
+
+            # Lưu vào session toàn cục
+            global _synced_session
+            _synced_session = result
+            result["status"] = "success"
+            return result
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/synced_session")
+async def get_synced_session():
+    """Trả về session TikTok đã được sync trước đó (không cần gọi lại)"""
+    if _synced_session and "ms_token" in _synced_session:
+        return {"status": "success", **_synced_session}
+    return {"status": "empty", "detail": "Chưa có session. Hãy bấm Đồng bộ TikTok."}
+
+
+@app.delete("/api/synced_session")
+async def clear_synced_session():
+    """Xóa session TikTok đã lưu (đăng xuất)"""
+    global _synced_session
+    _synced_session = {}
+    return {"status": "success", "detail": "Đã xóa session."}
 
 # ─────────────────────────────────────
 # Trending
