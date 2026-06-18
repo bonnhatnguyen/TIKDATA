@@ -945,13 +945,20 @@
             return `<div class="video-grid">` + items.map(item => {
                 if (!item || !item.video) return '';
                 const thumb = item.video.cover || item.video.dynamicCover || item.video.originCover || '';
+                const playUrl = item.video.playAddr || item.video.downloadAddr || '';
                 const author = item.author?.uniqueId || '';
                 const desc = item.desc || '';
                 const plays = item.stats?.playCount || 0;
                 const likes = item.stats?.diggCount || 0;
+                
+                // Trình phát video xịn xò có controls
+                const mediaElement = playUrl 
+                    ? `<video class="video-thumb" src="${playUrl}" poster="${thumb}" controls preload="none" referrerpolicy="no-referrer" style="background:#000; object-fit:contain;"></video>`
+                    : (thumb ? `<img class="video-thumb" src="${thumb}" loading="lazy" alt="thumb">` : '<div class="video-thumb" style="background:#222;display:flex;align-items:center;justify-content:center;font-size:30px;">🎬</div>');
+
                 return `
                 <div class="video-card">
-                    ${thumb ? `<img class="video-thumb" src="${thumb}" loading="lazy" alt="thumb">` : '<div class="video-thumb" style="background:#222;display:flex;align-items:center;justify-content:center;font-size:30px;">🎬</div>'}
+                    ${mediaElement}
                     <div class="video-body">
                         ${author ? `<div class="video-author">@${author}</div>` : ''}
                         <div class="video-desc">${desc || '(Không có mô tả)'}</div>
