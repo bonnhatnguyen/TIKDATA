@@ -5,7 +5,7 @@ from TikTokApi import TikTokApi
 from playwright.async_api import async_playwright
 from pydantic import BaseModel
 from typing import Optional
-import re, os, asyncio
+import re, os, asyncio, json
 
 # Global state: store the latest synced TikTok session
 _synced_session: dict = {}
@@ -325,12 +325,42 @@ def extract_video_id(url: str) -> str | None:
     m = re.search(r'/video/(\d+)', url)
     return m.group(1) if m else None
 
+async def fetch_video_data_via_browser(url: str, ms_token: str = None) -> dict:
+    """Sử dụng Playwright duyệt web thực để lấy cục dữ liệu Video hoàn hảo từ thẻ <script>"""
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context()
+        if ms_token:
+            await context.add_cookies([{"name": "msToken", "value": ms_token, "domain": ".tiktok.com", "path": "/"}])
+        page = await context.new_page()
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=15000)
+            element = await page.query_selector('script#__UNIVERSAL_DATA_FOR_REHYDRATION__')
+            if element:
+                content = await element.inner_text()
+                data = json.loads(content)
+                default_scope = data.get('__DEFAULT_SCOPE__', {})
+                video_detail = default_scope.get('webapp.video-detail', {})
+                return video_detail.get('itemInfo', {}).get('itemStruct', {})
+        except Exception as e:
+            print(f"[Video Fetch] Lỗi Playwright: {e}")
+        finally:
+            await browser.close()
+    return None
+
 @app.get("/api/video/by_url")
 async def get_video_by_url(url: str, ms_token: str = None):
     try:
         video_id = extract_video_id(url)
         if not video_id:
             raise HTTPException(status_code=400, detail="Không thể trích xuất Video ID từ URL. Định dạng đúng: https://www.tiktok.com/@user/video/123456")
+        
+        # Dùng Playwright bốc thẳng Data không lo lỗi API
+        item_info = await fetch_video_data_via_browser(url, ms_token)
+        if item_info and "id" in item_info:
+            return {"status": "success", "data": item_info}
+            
+        # Fallback về TikTokApi nếu Playwright lỗi (mặc dù ít khi xảy ra)
         async with TikTokApi() as api:
             await make_session(api, ms_token)
             video = api.video(id=video_id)
