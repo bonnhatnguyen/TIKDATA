@@ -460,13 +460,49 @@
                 <p style="color: var(--text-muted); font-size: 14px; margin-bottom: 16px; line-height: 1.6;">
                     Kết nối tài khoản TikTok của bạn để tự động lấy <code style="background:#222;padding:2px 6px;border-radius:4px;color:var(--teal);">ms_token</code> và hiển thị thông tin kênh cá nhân.
                 </p>
-                <div style="display:flex; gap:10px; flex-wrap:wrap;">
-                    <button class="teal" onclick="loginAndSync()" id="btnLoginSync">🚀 Đăng nhập & Đồng bộ TikTok</button>
-                    <button class="outline" onclick="toggleManualSection()">✏️ Nhập ms_token thủ công</button>
+
+                <!-- NEW: Bố cục nút bấm chia làm 3 cách rõ ràng -->
+                <div style="display:flex; flex-direction:column; gap:16px;">
+                    <!-- Cách 1: Bookmarklet (Khuyên dùng) -->
+                    <div style="background:rgba(32,213,236,0.05); border:1px solid rgba(32,213,236,0.4); border-radius:12px; padding:20px; box-shadow: 0 4px 15px rgba(0,0,0,0.1);">
+                        <h3 style="margin-top:0; color:var(--teal); font-size:16px; margin-bottom:12px; display:flex; align-items:center; gap:8px;">
+                            <span>⭐</span> Kết nối tự động qua Dấu trang (Khuyên dùng)
+                        </h3>
+                        
+                        <div style="background:var(--surface); border-radius:8px; padding:12px; margin-bottom:16px; font-size:13px; color:#ddd; border:1px dashed rgba(255,255,255,0.1);">
+                            <strong style="color:#fff; font-size:14px;">🛠 Hướng dẫn 3 bước siêu đơn giản:</strong>
+                            <ol style="margin:10px 0 0; padding-left:20px; line-height:1.7;">
+                                <li>Nhấn <kbd style="background:#333;padding:2px 6px;border-radius:4px;border:1px solid #555;font-family:monospace;">Ctrl + Shift + B</kbd> để hiện Thanh Dấu Trang ở trên cùng.</li>
+                                <li>Dùng chuột <strong>Kéo và Thả</strong> nút màu xanh bên dưới lên Thanh Dấu Trang đó.</li>
+                                <li>Mở tab mới vào thẳng <a href="https://www.tiktok.com" target="_blank" style="color:var(--teal);text-decoration:underline;">tiktok.com</a>, sau đó <strong>bấm vào cái nút bạn vừa kéo</strong>. Xong!</li>
+                            </ol>
+                        </div>
+
+                        <div style="text-align:center; padding: 10px;">
+                            <a href="javascript:(function(){var m=document.cookie.match(/(^| )msToken=([^;]+)/);if(m){var uMatch=document.body.innerHTML.match(/&quot;uniqueId&quot;:&quot;([^&quot;]+)&quot;/);var u=uMatch?uMatch[1]:'';window.location.href='http://127.0.0.1:8005/?ms_token='+m[2]+(u?'&username='+u:'');}else{alert('Không tìm thấy msToken. Đảm bảo bạn đã đăng nhập TikTok trên tab này!');}})();" 
+                               style="display:inline-flex; align-items:center; gap:8px; background:linear-gradient(135deg, #20d5ec, #fe2c55); color:#fff; font-weight:800; font-size: 14px; padding:12px 24px; border-radius:50px; text-decoration:none; box-shadow:0 4px 15px rgba(32,213,236,0.4); cursor:grab; transition: transform 0.2s;"
+                               onmouseover="this.style.transform='scale(1.05)'"
+                               onmouseout="this.style.transform='scale(1)'"
+                               title="Kéo thả nút này lên thanh Dấu trang của bạn">
+                               <span style="font-size:20px;">⚡</span> KÉO NÚT NÀY LÊN THANH DẤU TRANG
+                            </a>
+                        </div>
+                    </div>
+
+                    <!-- Cách 2: Playwright -->
+                    <div>
+                        <button class="teal" onclick="loginAndSync()" id="btnLoginSync" style="width:100%;">🚀 Cách 2: Mở cửa sổ đăng nhập tự động (Playwright)</button>
+                    </div>
+
+                    <!-- Cách 3: Thủ công -->
+                    <div>
+                        <button class="outline" onclick="toggleManualSection()" style="width:100%;">✏️ Cách 3: Nhập ms_token thủ công (hoặc Bot lấy nhanh)</button>
+                    </div>
                 </div>
 
                 <!-- Manual section (ẩn mặc định) -->
                 <div id="manualSection" style="display:none; margin-top:16px; padding:16px; background:var(--surface2); border:1px solid var(--border); border-radius:12px;">
+
                     <details class="instruction-box" style="margin-bottom:12px;">
                         <summary>💡 Cách lấy ms_token thủ công</summary>
                         <ol>
@@ -726,8 +762,55 @@
             } catch(e) {}
         }
 
-        // Kiểm tra session cũ khi load trang
+        // Kiểm tra session cũ HOẶC xử lý Bookmarklet URL khi load trang
         window.addEventListener('DOMContentLoaded', async () => {
+            // 1. Kiểm tra URL xem có chứa ms_token từ Bookmarklet truyền về không
+            const urlParams = new URLSearchParams(window.location.search);
+            const bookmarkMsToken = urlParams.get('ms_token');
+            const bookmarkUsername = urlParams.get('username');
+
+            if (bookmarkMsToken) {
+                // Xóa param khỏi URL để trông sạch sẽ
+                window.history.replaceState({}, document.title, window.location.pathname);
+                
+                // Hiển thị trạng thái đang xử lý Bookmarklet
+                setState('waiting');
+                document.querySelector('#stateWaiting div').innerHTML = `
+                    <div class="loader-spinner" style="border-top-color:var(--teal); margin:0 auto 12px;"></div>
+                    <div style="font-size:15px; font-weight:700; color:var(--teal); margin-bottom:8px;">Đang xử lý Token chính chủ...</div>
+                `;
+
+                // Gọi API lưu thủ công
+                try {
+                    const reqBody = { ms_token: bookmarkMsToken, username: bookmarkUsername || null };
+                    const res = await fetch('/api/sync_manual', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(reqBody)
+                    });
+                    const data = await res.json();
+                    if (data.status === 'success') {
+                        document.getElementById('ms_token').value = data.ms_token;
+                        renderConnectedProfile(data);
+                        setState('connected');
+                        if (data.tiktok_username) {
+                            const unameInput = document.getElementById('username');
+                            if (unameInput) unameInput.value = data.tiktok_username;
+                        }
+                        alert("✅ Kết nối Bookmarklet thành công!");
+                        return; // Xong việc của bookmarklet
+                    } else {
+                        alert("❌ Lỗi từ server: " + (data.detail || "Không rõ nguyên nhân"));
+                        setState('notConnected');
+                    }
+                } catch(e) {
+                    console.error("Bookmarklet error", e);
+                    alert("❌ Không thể kết nối với server. Vui lòng kiểm tra xem Terminal đã chạy chưa!");
+                    setState('notConnected');
+                }
+            }
+
+            // 2. Nếu không có bookmarklet, check session cũ bình thường
             try {
                 const res = await fetch('/api/synced_session');
                 const data = await res.json();

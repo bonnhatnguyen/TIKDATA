@@ -3,6 +3,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from TikTokApi import TikTokApi
 from playwright.async_api import async_playwright
+from pydantic import BaseModel
+from typing import Optional
 import re, os, asyncio
 
 # Global state: store the latest synced TikTok session
@@ -78,7 +80,7 @@ async def login_and_sync():
 
             # Chờ tối đa 3 phút để người dùng đăng nhập
             # Phát hiện đăng nhập thành công khi cookie sid_tt xuất hiện
-            print("[TikTok Sync] Đang chờ người dùng đăng nhập...")
+            print("[TikTok Sync] Waiting for user to login...")
             logged_in = False
             for _ in range(180):  # 180 * 1s = 3 phút
                 await asyncio.sleep(1)
@@ -87,7 +89,7 @@ async def login_and_sync():
                 # sid_tt chỉ xuất hiện khi đã đăng nhập thành công
                 if "sid_tt" in cookie_names:
                     logged_in = True
-                    print("[TikTok Sync] Phát hiện đăng nhập thành công!")
+                    print("[TikTok Sync] Login successful!")
                     break
 
             if not logged_in:
@@ -111,7 +113,7 @@ async def login_and_sync():
             await asyncio.sleep(3)
 
             final_url = page.url
-            print(f"[TikTok Sync] URL sau redirect: {final_url}")
+            print(f"[TikTok Sync] Redirect URL: {final_url}")
 
             # Trích xuất username từ URL (dạng /@username)
             username_match = re.search(r'tiktok\.com/@([^/?]+)', final_url)
@@ -144,17 +146,43 @@ async def login_and_sync():
                         user_data = await api.user(result["tiktok_username"]).info()
                         result["user_info"] = user_data
                 except Exception as e:
-                    print(f"[TikTok Sync] Không fetch được profile: {e}")
+                    print(f"[TikTok Sync] Failed to fetch profile: {e}")
 
             # Lưu vào session toàn cục
             global _synced_session
             _synced_session = result
-            result["status"] = "success"
-            return result
+
+            return {"status": "success", **result}
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return {"status": "error", "detail": str(e)}
 
+class ManualSyncRequest(BaseModel):
+    ms_token: str
+    username: Optional[str] = None
+
+@app.post("/api/sync_manual")
+async def sync_manual(req: ManualSyncRequest):
+    """Lưu ms_token thủ công (từ Bookmarklet) và fetch profile."""
+    result = {
+        "ms_token": req.ms_token,
+        "tiktok_username": req.username,
+        "is_manual": True
+    }
+    
+    # Nếu có username, lấy thông tin profile để chứng minh token hoạt động
+    if req.username:
+        try:
+            async with TikTokApi() as api:
+                await api.create_sessions(ms_tokens=[req.ms_token], num_sessions=1, sleep_after=1)
+                user_data = await api.user(req.username).info()
+                result["user_info"] = user_data
+        except Exception as e:
+            print(f"[Manual Sync] Failed to fetch profile: {e}")
+
+    global _synced_session
+    _synced_session = result
+    return {"status": "success", **result}
 
 @app.get("/api/synced_session")
 async def get_synced_session():
