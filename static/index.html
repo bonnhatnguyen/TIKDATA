@@ -548,6 +548,16 @@
         <!-- Config (hidden ms_token field for API calls) -->
         <input type="hidden" id="ms_token" value="">
 
+        <!-- Modal Xem Video Fullscreen -->
+        <div id="videoModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.9); z-index:9999; align-items:center; justify-content:center; backdrop-filter:blur(5px);">
+            <div style="position:relative; width:100%; max-width:400px; height:80vh; max-height:750px; background:#000; border-radius:16px; box-shadow:0 10px 40px rgba(0,0,0,0.5); overflow:hidden;">
+                <!-- Nút đóng -->
+                <div onclick="closeVideoModal()" style="position:absolute; top:15px; right:15px; width:36px; height:36px; background:rgba(255,255,255,0.2); border-radius:50%; display:flex; align-items:center; justify-content:center; color:#fff; font-size:18px; cursor:pointer; z-index:10; backdrop-filter:blur(5px); font-weight:bold;">✕</div>
+                <!-- Vùng chứa Iframe -->
+                <div id="videoModalContent" style="width:100%; height:100%;"></div>
+            </div>
+        </div>
+
         <!-- Actions -->
         <div class="card">
             <h2>🚀 Các chức năng</h2>
@@ -940,18 +950,20 @@
             </div>`;
         }
 
+        function closeVideoModal() {
+            document.getElementById('videoModal').style.display = 'none';
+            document.getElementById('videoModalContent').innerHTML = ''; // Dừng phát video khi đóng
+        }
+
         function renderVideoGrid(items) {
             if (!items || items.length === 0) return '<p style="color:#888;padding:20px 0;">Không có video nào.</p>';
             
-            // Hàm toàn cục để load Iframe khi user click vào ảnh bìa (chống lag khi load 1 lúc 10 iframes)
-            window.playTikTokVideo = function(element, videoId) {
-                const iframe = document.createElement('iframe');
-                iframe.src = `https://www.tiktok.com/embed/v2/${videoId}?lang=vi-VN`;
-                iframe.style = "width: 100%; height: 100%; border: none; position: absolute; top:0; left:0; border-radius:12px;";
-                iframe.allowFullscreen = true;
-                iframe.allow = "encrypted-media;";
-                element.innerHTML = '';
-                element.appendChild(iframe);
+            // Hàm toàn cục để mở Video Modal (to đẹp, không bị bóp méo)
+            window.playTikTokVideo = function(videoId) {
+                const modal = document.getElementById('videoModal');
+                const content = document.getElementById('videoModalContent');
+                content.innerHTML = `<iframe src="https://www.tiktok.com/embed/v2/${videoId}?lang=vi-VN" style="width: 100%; height: 100%; border: none; display: block;" allowfullscreen allow="encrypted-media;"></iframe>`;
+                modal.style.display = 'flex';
             };
 
             return `<div class="video-grid">` + items.map(item => {
@@ -966,10 +978,10 @@
                 
                 return `
                 <div class="video-card">
-                    <!-- Ảnh bìa bấm vào sẽ load Iframe xịn -->
-                    <div class="video-thumb-container" onclick="playTikTokVideo(this, '${videoId}')" style="position:relative; width:100%; height:350px; background:#111; border-radius:12px; cursor:pointer; overflow:hidden;">
-                        ${thumb ? `<img src="${thumb}" loading="lazy" style="width:100%; height:100%; object-fit:cover; opacity:0.8;">` : ''}
-                        <div style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); background:rgba(0,0,0,0.6); color:#fff; border-radius:50%; width:60px; height:60px; display:flex; align-items:center; justify-content:center; font-size:30px; box-shadow: 0 4px 15px rgba(0,0,0,0.3); border:2px solid rgba(255,255,255,0.2);">▶</div>
+                    <!-- Ảnh bìa bấm vào sẽ mở Modal xịn -->
+                    <div class="video-thumb-container" onclick="playTikTokVideo('${videoId}')" style="position:relative; width:100%; height:300px; background:#111; border-radius:12px; cursor:pointer; overflow:hidden;">
+                        ${thumb ? `<img src="${thumb}" loading="lazy" style="width:100%; height:100%; object-fit:cover; opacity:0.8; transition:transform 0.3s;" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">` : ''}
+                        <div style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); background:rgba(32,213,236,0.8); color:#fff; border-radius:50%; width:50px; height:50px; display:flex; align-items:center; justify-content:center; font-size:24px; box-shadow: 0 4px 15px rgba(0,0,0,0.5);">▶</div>
                     </div>
                     
                     <div class="video-body" style="padding-top:12px;">
