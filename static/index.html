@@ -1022,8 +1022,10 @@
                 else html = '<p style="color:#aaa">Xem dữ liệu thô bên dưới.</p>';
             } else if (d && d.userInfo) {
                 html = renderProfile(d);
+            } else if (d && d.id && d.video) {
+                html = renderVideoGrid([d]);
             } else {
-                html = '<p style="color:#aaa">Xem dữ liệu thô bên dưới.</p>';
+                html = '<p style="color:#aaa">Lấy dữ liệu thành công! Hãy cuộn xuống xem mã JSON thô bên dưới nhé.</p>';
             }
 
             visualDiv.innerHTML = html;
