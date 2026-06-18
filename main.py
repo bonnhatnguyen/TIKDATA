@@ -355,8 +355,22 @@ async def get_video_by_url(url: str, ms_token: str = None):
         if not video_id:
             raise HTTPException(status_code=400, detail="Không thể trích xuất Video ID từ URL. Định dạng đúng: https://www.tiktok.com/@user/video/123456")
         
-        # Dùng Playwright bốc thẳng Data không lo lỗi API
+        # 1. Dùng Playwright bốc thẳng Data không lo lỗi API
         item_info = await fetch_video_data_via_browser(url, ms_token)
+        
+        # 2. Lấy link MP4 không bị chặn (bypass 403) từ TikWM
+        try:
+            import httpx
+            async with httpx.AsyncClient() as client:
+                tikwm_resp = await client.get(f"https://www.tikwm.com/api/?url={url}", timeout=10)
+                tikwm_data = tikwm_resp.json()
+                clean_play_url = tikwm_data.get("data", {}).get("play")
+                if clean_play_url and item_info and "video" in item_info:
+                    item_info["video"]["playAddr"] = clean_play_url
+                    item_info["video"]["downloadAddr"] = clean_play_url
+        except Exception as e:
+            print(f"[TikWM Fetch Error]: {e}")
+
         if item_info and "id" in item_info:
             return {"status": "success", "data": item_info}
             
