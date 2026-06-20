@@ -1,12 +1,13 @@
-from fastapi import FastAPI, HTTPException, Header, Request
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel, SecretStr
-from typing import Optional, List, Dict, Any
-from TikTokApi import TikTokApi
-from playwright.async_api import async_playwright
-import asyncio
+import re
 import os
 import hmac
+import asyncio
+from fastapi import FastAPI, HTTPException, Header, Request
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, SecretStr, constr, validator, ConfigDict
+from typing import Optional
+from TikTokApi import TikTokApi
+from playwright.async_api import async_playwright
 
 TIKDATA_ENABLE_DEV_UI = os.getenv("TIKDATA_ENABLE_DEV_UI", "false").lower() == "true"
 
@@ -16,37 +17,69 @@ app = FastAPI(
     openapi_url="/openapi.json" if TIKDATA_ENABLE_DEV_UI else None,
 )
 
-# Verify service token
-TIKDATA_SERVICE_TOKEN = os.getenv("VIRALFORGE_SERVICE_TOKEN", "dev_secret_token_123").encode("utf-8")
+# Verify service token strictly
+token_env = os.getenv("VIRALFORGE_SERVICE_TOKEN")
+if not token_env:
+    raise RuntimeError("VIRALFORGE_SERVICE_TOKEN environment variable is strictly required.")
+TIKDATA_SERVICE_TOKEN = token_env.encode("utf-8")
+
+# Concurrency limits
+TIKTOK_AUTO_TOKEN_ENABLED = os.getenv("TIKTOK_AUTO_TOKEN_ENABLED", "true").lower() == "true"
+max_concurrency = int(os.getenv("TIKTOK_MAX_BROWSER_CONCURRENCY", "2"))
+browser_semaphore = asyncio.Semaphore(max_concurrency)
+browser_launch_timeout = int(os.getenv("TIKTOK_BROWSER_LAUNCH_TIMEOUT_MS", "15000"))
+navigation_timeout = int(os.getenv("TIKTOK_NAVIGATION_TIMEOUT_MS", "15000"))
+sync_timeout = int(os.getenv("TIKTOK_SYNC_TIMEOUT_MS", "30000"))
 
 class ProfileSyncRequest(BaseModel):
-    username: str
+    model_config = ConfigDict(extra='forbid')
+    username: constr(min_length=1, max_length=24, strip_whitespace=True)
     manual_ms_token: Optional[SecretStr] = None
+
+    @validator('username')
+    def validate_username(cls, v):
+        if 'http' in v.lower() or 'tiktok.com' in v.lower():
+            raise ValueError('Username must not be a URL')
+        if v.startswith('@'):
+            raise ValueError('Username must not contain @ prefix')
+        if not re.match(r'^[a-zA-Z0-9_.]+$', v):
+            raise ValueError('Username contains invalid characters')
+        return v
 
 async def acquire_ephemeral_ms_token() -> Optional[str]:
     """Attempt to quietly acquire an msToken if one is not provided."""
+    if not TIKTOK_AUTO_TOKEN_ENABLED:
+        return None
+        
     ms_token = None
     try:
-        async with async_playwright() as p:
-            # Must run headless
-            browser = await p.chromium.launch(headless=True)
-            context = await browser.new_context()
-            page = await context.new_page()
-            try:
-                await page.goto("https://www.tiktok.com", wait_until="commit", timeout=15000)
-                await asyncio.sleep(3)
-                cookies = await context.cookies()
-                for cookie in cookies:
-                    if cookie["name"] == "msToken":
-                        ms_token = cookie["value"]
-                        break
-            finally:
-                await context.close()
-                await browser.close()
+        async with browser_semaphore:
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True, timeout=browser_launch_timeout)
+                context = await browser.new_context()
+                page = await context.new_page()
+                try:
+                    await page.goto("https://www.tiktok.com", wait_until="commit", timeout=navigation_timeout)
+                    await asyncio.sleep(2)
+                    cookies = await context.cookies()
+                    for cookie in cookies:
+                        if cookie["name"] == "msToken":
+                            ms_token = cookie["value"]
+                            break
+                finally:
+                    await context.close()
+                    await browser.close()
     except Exception:
         # Do not log raw playwright exceptions that leak proxy details or selectors
         pass
     return ms_token
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    return JSONResponse(
+        status_code=500,
+        content={"error": "Internal Server Error", "code": "INTERNAL_ERROR"}
+    )
 
 @app.get("/healthz")
 async def healthz():
@@ -112,7 +145,7 @@ async def sync_profile(
                 "bio": tiktok_user.get("signature"),
                 "avatarUrl": tiktok_user.get("avatarMedium") or tiktok_user.get("avatarLarger"),
                 "profileUrl": f"https://www.tiktok.com/@{tiktok_user.get('uniqueId')}",
-                "verified": tiktok_user.get("verified", False),
+                "isTikTokVerified": tiktok_user.get("verified", False),
                 "followerCount": str(tiktok_stats.get("followerCount", 0)),
                 "followingCount": str(tiktok_stats.get("followingCount", 0)),
                 "likeCount": str(tiktok_stats.get("heartCount", 0)),
