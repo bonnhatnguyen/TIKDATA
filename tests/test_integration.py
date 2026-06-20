@@ -6,10 +6,10 @@ from main import create_app, Settings
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+@pytest.mark.skipif(os.getenv("TIKDATA_INTEGRATION_TESTS") != "1", reason="Integration tests disabled unless TIKDATA_INTEGRATION_TESTS=1")
 async def test_real_tiktok_profile_sync():
     # This test hits real TikTok and uses Playwright
     # Require integration explicitly
-    assert os.getenv("TIKDATA_INTEGRATION_TESTS") == "1", "Integration tests disabled unless TIKDATA_INTEGRATION_TESTS=1"
 
     settings = Settings(
         tikdata_enable_dev_ui=False,

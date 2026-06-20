@@ -277,7 +277,8 @@ async def test_semaphore_limit():
             yield
         mock_user.videos = mock_videos
 
-        async with AsyncClient(app=app, base_url="http://test") as ac:
+        from httpx import ASGITransport
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             tasks = []
             for _ in range(5):
                 tasks.append(
