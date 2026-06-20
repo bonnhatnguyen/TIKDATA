@@ -21,6 +21,36 @@ class Settings:
     tiktok_sync_timeout_ms: int = 30000
     tiktok_profile_video_count: int = 6
 
+    def __post_init__(self):
+        if not self.viralforge_service_token or not self.viralforge_service_token.strip():
+            raise ValueError("Service token must not be empty or whitespace-only")
+        if self.tiktok_max_browser_concurrency < 1 or self.tiktok_max_browser_concurrency > 20:
+            raise ValueError("Browser concurrency must be between 1 and 20")
+        if self.tiktok_browser_launch_timeout_ms < 5000:
+            raise ValueError("Browser launch timeout must be at least 5000ms")
+        if self.tiktok_navigation_timeout_ms < 5000:
+            raise ValueError("Navigation timeout must be at least 5000ms")
+        if self.tiktok_sync_timeout_ms < 5000:
+            raise ValueError("Sync timeout must be at least 5000ms")
+        if self.tiktok_profile_video_count < 1 or self.tiktok_profile_video_count > 12:
+            raise ValueError("Video count must be between 1 and 12")
+
+    @classmethod
+    def from_env(cls):
+        token_env = os.getenv("VIRALFORGE_SERVICE_TOKEN")
+        if not token_env:
+            raise RuntimeError("VIRALFORGE_SERVICE_TOKEN environment variable is strictly required.")
+        return cls(
+            tikdata_enable_dev_ui=os.getenv("TIKDATA_ENABLE_DEV_UI", "false").lower() == "true",
+            viralforge_service_token=token_env,
+            tiktok_auto_token_enabled=os.getenv("TIKTOK_AUTO_TOKEN_ENABLED", "true").lower() == "true",
+            tiktok_max_browser_concurrency=int(os.getenv("TIKTOK_MAX_BROWSER_CONCURRENCY", "2")),
+            tiktok_browser_launch_timeout_ms=int(os.getenv("TIKTOK_BROWSER_LAUNCH_TIMEOUT_MS", "15000")),
+            tiktok_navigation_timeout_ms=int(os.getenv("TIKTOK_NAVIGATION_TIMEOUT_MS", "15000")),
+            tiktok_sync_timeout_ms=int(os.getenv("TIKTOK_SYNC_TIMEOUT_MS", "30000")),
+            tiktok_profile_video_count=int(os.getenv("TIKTOK_PROFILE_VIDEO_COUNT", "6")),
+        )
+
 class ProfileSyncRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
     username: constr(min_length=1, max_length=24, strip_whitespace=True)
@@ -36,26 +66,10 @@ class ProfileSyncRequest(BaseModel):
             raise ValueError('Username contains invalid characters')
         return v
 
-def create_app(settings: Optional[Settings] = None) -> FastAPI:
-    if settings is None:
-        token_env = os.getenv("VIRALFORGE_SERVICE_TOKEN")
-        if not token_env:
-            raise RuntimeError("VIRALFORGE_SERVICE_TOKEN environment variable is strictly required.")
-        
-        video_count_env = int(os.getenv("TIKTOK_PROFILE_VIDEO_COUNT", "6"))
-        if video_count_env < 1 or video_count_env > 12:
-            raise RuntimeError("TIKTOK_PROFILE_VIDEO_COUNT must be between 1 and 12")
+def create_app_from_env() -> FastAPI:
+    return create_app(Settings.from_env())
 
-        settings = Settings(
-            tikdata_enable_dev_ui=os.getenv("TIKDATA_ENABLE_DEV_UI", "false").lower() == "true",
-            viralforge_service_token=token_env,
-            tiktok_auto_token_enabled=os.getenv("TIKTOK_AUTO_TOKEN_ENABLED", "true").lower() == "true",
-            tiktok_max_browser_concurrency=int(os.getenv("TIKTOK_MAX_BROWSER_CONCURRENCY", "2")),
-            tiktok_browser_launch_timeout_ms=int(os.getenv("TIKTOK_BROWSER_LAUNCH_TIMEOUT_MS", "15000")),
-            tiktok_navigation_timeout_ms=int(os.getenv("TIKTOK_NAVIGATION_TIMEOUT_MS", "15000")),
-            tiktok_sync_timeout_ms=int(os.getenv("TIKTOK_SYNC_TIMEOUT_MS", "30000")),
-            tiktok_profile_video_count=video_count_env,
-        )
+def create_app(settings: Settings) -> FastAPI:
 
     app = FastAPI(
         docs_url="/docs" if settings.tikdata_enable_dev_ui else None,
@@ -211,13 +225,7 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
 
     return app
 
-import sys
-if __name__ != "__main__":
-    if "pytest" not in sys.modules:
-        app = create_app()
-    else:
-        app = None
-
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="127.0.0.1", port=8001, reload=True)
+    port = int(os.getenv("PORT", "8000"))
+    uvicorn.run("main:create_app_from_env", host="127.0.0.1", port=port, reload=True, factory=True)

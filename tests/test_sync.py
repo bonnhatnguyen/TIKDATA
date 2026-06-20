@@ -15,9 +15,10 @@ def test_settings():
         viralforge_service_token="test_token_secret",
         tiktok_auto_token_enabled=True,
         tiktok_max_browser_concurrency=2,
-        tiktok_browser_launch_timeout_ms=1000,
-        tiktok_navigation_timeout_ms=1000,
-        tiktok_sync_timeout_ms=3000
+        tiktok_browser_launch_timeout_ms=5000,
+        tiktok_navigation_timeout_ms=5000,
+        tiktok_sync_timeout_ms=15000,
+        tiktok_profile_video_count=6
     )
 
 @pytest.fixture
@@ -29,9 +30,10 @@ def client(app):
     return TestClient(app, raise_server_exceptions=False)
 
 def test_missing_prod_secret():
-    with patch("os.getenv", return_value=None):
-        with pytest.raises(RuntimeError, match="VIRALFORGE_SERVICE_TOKEN environment variable is strictly required"):
-            create_app()
+        with patch("os.getenv", return_value=None):
+            with pytest.raises(RuntimeError, match="VIRALFORGE_SERVICE_TOKEN environment variable is strictly required"):
+                from main import create_app_from_env
+                create_app_from_env()
 
 def test_healthz(client):
     response = client.get("/healthz")
@@ -206,7 +208,23 @@ def test_manual_success(client):
             assert data["profile"]["followerCount"] == "50"
             assert len(data["videos"]) == 0
 
-def test_timeout(client):
+def test_timeout():
+    from main import create_app, Settings
+    from starlette.testclient import TestClient
+    
+    settings = Settings(
+        tikdata_enable_dev_ui=False,
+        viralforge_service_token="test_token_secret",
+        tiktok_auto_token_enabled=True,
+        tiktok_max_browser_concurrency=2,
+        tiktok_browser_launch_timeout_ms=5000,
+        tiktok_navigation_timeout_ms=5000,
+        tiktok_sync_timeout_ms=5000,
+        tiktok_profile_video_count=6
+    )
+    app = create_app(settings)
+    client = TestClient(app, raise_server_exceptions=False)
+
     with patch("main.async_playwright") as MockPlaywright:
         mock_browser = AsyncMock()
         mock_context = AsyncMock()
@@ -215,16 +233,16 @@ def test_timeout(client):
         mock_browser.new_context.return_value = mock_context
         mock_context.new_page.return_value = mock_page
         mock_context.cookies.return_value = [{"name": "msToken", "value": "auto_token"}]
-        
+
         with patch("main.TikTokApi") as MockApi:
             mock_api = MagicMock()
             mock_api.create_sessions = AsyncMock()
             MockApi.return_value.__aenter__.return_value = mock_api
             mock_user = MagicMock()
             mock_api.user.return_value = mock_user
-            
+
             async def slow_info():
-                await asyncio.sleep(5) # Greater than sync_timeout 3000ms (3s)
+                await asyncio.sleep(6) # Greater than sync_timeout 5000ms
                 return {}
             mock_user.info = slow_info
 
@@ -243,12 +261,12 @@ async def test_semaphore_limit():
 
     settings = Settings(
         tikdata_enable_dev_ui=False,
-        viralforge_service_token="test",
-        tiktok_auto_token_enabled=False,
+        viralforge_service_token="test_token_secret",
+        tiktok_auto_token_enabled=True,
         tiktok_max_browser_concurrency=2,
-        tiktok_browser_launch_timeout_ms=1000,
-        tiktok_navigation_timeout_ms=1000,
-        tiktok_sync_timeout_ms=30000,
+        tiktok_browser_launch_timeout_ms=5000,
+        tiktok_navigation_timeout_ms=5000,
+        tiktok_sync_timeout_ms=15000,
         tiktok_profile_video_count=6
     )
     app = create_app(settings)
@@ -285,7 +303,7 @@ async def test_semaphore_limit():
                     asyncio.create_task(ac.post(
                         "/internal/profile/sync",
                         json={"username": "tiktok", "manual_ms_token": "token"},
-                        headers={"X-ViralForge-Service-Token": "test"}
+                        headers={"X-ViralForge-Service-Token": "test_token_secret"}
                     ))
                 )
 

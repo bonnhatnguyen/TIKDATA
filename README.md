@@ -19,7 +19,7 @@
 ```bash
 pip install fastapi uvicorn TikTokApi playwright
 python -m playwright install chromium
-python -m uvicorn main:app --host 127.0.0.1 --port 8000
+uvicorn main:create_app_from_env --factory --host 127.0.0.1 --port 8000
 ```
 
 Mở trình duyệt tại: http://127.0.0.1:8000
