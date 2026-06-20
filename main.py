@@ -1,19 +1,27 @@
-from fastapi import FastAPI, HTTPException, Header
-from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException, Header, Request
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, SecretStr
 from typing import Optional, List, Dict, Any
 from TikTokApi import TikTokApi
 from playwright.async_api import async_playwright
 import asyncio
 import os
+import hmac
 
-app = FastAPI()
+TIKDATA_ENABLE_DEV_UI = os.getenv("TIKDATA_ENABLE_DEV_UI", "false").lower() == "true"
+
+app = FastAPI(
+    docs_url="/docs" if TIKDATA_ENABLE_DEV_UI else None,
+    redoc_url="/redoc" if TIKDATA_ENABLE_DEV_UI else None,
+    openapi_url="/openapi.json" if TIKDATA_ENABLE_DEV_UI else None,
+)
 
 # Verify service token
-TIKDATA_SERVICE_TOKEN = os.getenv("TIKDATA_SERVICE_TOKEN", "dev_secret_token_123")
+TIKDATA_SERVICE_TOKEN = os.getenv("VIRALFORGE_SERVICE_TOKEN", "dev_secret_token_123").encode("utf-8")
 
-class SyncProfileRequest(BaseModel):
-    profile_input: str
-    manual_ms_token: Optional[str] = None
+class ProfileSyncRequest(BaseModel):
+    username: str
+    manual_ms_token: Optional[SecretStr] = None
 
 async def acquire_ephemeral_ms_token() -> Optional[str]:
     """Attempt to quietly acquire an msToken if one is not provided."""
@@ -35,19 +43,31 @@ async def acquire_ephemeral_ms_token() -> Optional[str]:
             finally:
                 await context.close()
                 await browser.close()
-    except Exception as e:
-        print(f"[TIKDATA] Failed automatic msToken acquisition: {e}")
+    except Exception:
+        # Do not log raw playwright exceptions that leak proxy details or selectors
+        pass
     return ms_token
+
+@app.get("/healthz")
+async def healthz():
+    return {
+        "ok": True,
+        "service": "tiktok-data-service"
+    }
 
 @app.post("/internal/profile/sync")
 async def sync_profile(
-    req: SyncProfileRequest,
+    req: ProfileSyncRequest,
     x_viralforge_service_token: str = Header(None)
 ):
-    if x_viralforge_service_token != TIKDATA_SERVICE_TOKEN:
+    if not x_viralforge_service_token:
+        raise HTTPException(status_code=401, detail="Missing service token")
+        
+    received_token = x_viralforge_service_token.encode("utf-8")
+    if not hmac.compare_digest(received_token, TIKDATA_SERVICE_TOKEN):
         raise HTTPException(status_code=401, detail="Unauthorized service token")
 
-    ms_token = req.manual_ms_token
+    ms_token = req.manual_ms_token.get_secret_value() if req.manual_ms_token else None
     
     # 1. Acquire token
     if not ms_token:
@@ -55,11 +75,11 @@ async def sync_profile(
         
     if not ms_token:
         # Fallback required
-        return {
+        return JSONResponse(status_code=200, content={
             "status": "fallback_required",
             "code": "TIKTOK_BOOKMARK_REQUIRED",
-            "message": "Automatic TikTok connection is unavailable. Please use the manual bookmark method."
-        }
+            "message": "Automatic TikTok connection is unavailable."
+        })
 
     # 2. Fetch data
     try:
@@ -71,13 +91,17 @@ async def sync_profile(
                 browser=os.getenv("TIKTOK_BROWSER", "chromium")
             )
             
-            username = req.profile_input
+            username = req.username
             
             user = api.user(username)
             user_info = await user.info()
             
             if "userInfo" not in user_info:
-                raise Exception("Invalid profile data returned from TikTok API")
+                return JSONResponse(status_code=400, content={
+                    "status": "error",
+                    "code": "TIKTOK_PROFILE_NOT_FOUND",
+                    "message": "The requested TikTok profile could not be found."
+                })
 
             tiktok_user = user_info["userInfo"].get("user", {})
             tiktok_stats = user_info["userInfo"].get("stats", {})
@@ -98,7 +122,7 @@ async def sync_profile(
             videos = []
             try:
                 # Fetch 6 latest public videos
-                async for video in user.videos(count=6):
+                async for video in user.videos(count=int(os.getenv("TIKTOK_PROFILE_VIDEO_COUNT", "6"))):
                     v_dict = video.as_dict
                     v_item = v_dict.get("itemStruct", v_dict)
                     
@@ -113,19 +137,21 @@ async def sync_profile(
                         "shareCount": str(v_item.get("stats", {}).get("shareCount", 0)),
                         "createdAt": str(v_item.get("createTime", ""))
                     })
-            except Exception as ve:
-                print(f"[TIKDATA] Could not fetch videos for {username}: {ve}")
+            except Exception:
+                pass # Silently fail video fetch if profile is private/empty but user is valid
 
             return {
                 "status": "success",
                 "profile": normalized_profile,
-                "videos": videos,
-                "syncedAt": str(asyncio.get_event_loop().time()) # Or use standard datetime string from client
+                "videos": videos
             }
             
-    except Exception as e:
-        print(f"[TIKDATA] Profile sync failed: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to fetch TikTok data")
+    except Exception:
+        return JSONResponse(status_code=502, content={
+            "status": "error",
+            "code": "TIKTOK_UPSTREAM_UNAVAILABLE",
+            "message": "TikTok is temporarily unavailable."
+        })
     finally:
         # Clear sensitive variables from memory
         ms_token = None
