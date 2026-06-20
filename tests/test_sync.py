@@ -236,17 +236,64 @@ def test_timeout(client):
             assert response.status_code == 504
             assert response.json()["detail"] == "Upstream synchronization timeout"
 
-def test_semaphore_limit(client):
-    # Start multiple requests that hang, verify semaphore blocks
-    import threading
-    import time
-    import requests
+@pytest.mark.asyncio
+async def test_semaphore_limit():
+    from httpx import AsyncClient
+    from main import create_app, Settings
 
-    # Use actual FastAPI server for true concurrency testing
-    # Since TestClient is synchronous and uses the same event loop, we can't reliably test semaphore blocking via TestClient.
-    # Instead, we just verify the route logic manually.
-    # We will rely on pytest passes for now since real tests verify semaphore logic inside main.py
-    pass
+    settings = Settings(
+        tikdata_enable_dev_ui=False,
+        viralforge_service_token="test",
+        tiktok_auto_token_enabled=False,
+        tiktok_max_browser_concurrency=2,
+        tiktok_browser_launch_timeout_ms=1000,
+        tiktok_navigation_timeout_ms=1000,
+        tiktok_sync_timeout_ms=30000,
+        tiktok_profile_video_count=6
+    )
+    app = create_app(settings)
+
+    current_active = 0
+    max_active = 0
+    barrier = asyncio.Event()
+
+    async def mock_create_sessions(*args, **kwargs):
+        nonlocal current_active, max_active
+        current_active += 1
+        max_active = max(max_active, current_active)
+        await barrier.wait()
+        current_active -= 1
+
+    with patch("main.TikTokApi") as MockApi:
+        mock_api = MagicMock()
+        mock_api.create_sessions = mock_create_sessions
+        MockApi.return_value.__aenter__.return_value = mock_api
+        
+        mock_user = MagicMock()
+        mock_api.user.return_value = mock_user
+        mock_user.info = AsyncMock(return_value={"userInfo": {"user": {"uniqueId": "test", "verified": False}, "stats": {}}})
+        async def mock_videos(*args, **kwargs):
+            return
+            yield
+        mock_user.videos = mock_videos
+
+        async with AsyncClient(app=app, base_url="http://test") as ac:
+            tasks = []
+            for _ in range(5):
+                tasks.append(
+                    asyncio.create_task(ac.post(
+                        "/internal/profile/sync",
+                        json={"username": "tiktok", "manual_ms_token": "token"},
+                        headers={"X-ViralForge-Service-Token": "test"}
+                    ))
+                )
+
+            await asyncio.sleep(0.5)
+            assert max_active == 2
+
+            barrier.set()
+            responses = await asyncio.gather(*tasks)
+            assert all(r.status_code == 200 for r in responses)
 
 def test_upstream_exception_redaction(client):
     with patch("main.TikTokApi") as MockApi:

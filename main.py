@@ -19,6 +19,7 @@ class Settings:
     tiktok_browser_launch_timeout_ms: int = 15000
     tiktok_navigation_timeout_ms: int = 15000
     tiktok_sync_timeout_ms: int = 30000
+    tiktok_profile_video_count: int = 6
 
 class ProfileSyncRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
@@ -40,6 +41,11 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
         token_env = os.getenv("VIRALFORGE_SERVICE_TOKEN")
         if not token_env:
             raise RuntimeError("VIRALFORGE_SERVICE_TOKEN environment variable is strictly required.")
+        
+        video_count_env = int(os.getenv("TIKTOK_PROFILE_VIDEO_COUNT", "6"))
+        if video_count_env < 1 or video_count_env > 12:
+            raise RuntimeError("TIKTOK_PROFILE_VIDEO_COUNT must be between 1 and 12")
+
         settings = Settings(
             tikdata_enable_dev_ui=os.getenv("TIKDATA_ENABLE_DEV_UI", "false").lower() == "true",
             viralforge_service_token=token_env,
@@ -48,6 +54,7 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
             tiktok_browser_launch_timeout_ms=int(os.getenv("TIKTOK_BROWSER_LAUNCH_TIMEOUT_MS", "15000")),
             tiktok_navigation_timeout_ms=int(os.getenv("TIKTOK_NAVIGATION_TIMEOUT_MS", "15000")),
             tiktok_sync_timeout_ms=int(os.getenv("TIKTOK_SYNC_TIMEOUT_MS", "30000")),
+            tiktok_profile_video_count=video_count_env,
         )
 
     app = FastAPI(
@@ -65,30 +72,31 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
             
         ms_token = None
         try:
-            async with browser_semaphore:
-                async with async_playwright() as p:
-                    browser = await p.chromium.launch(headless=True, timeout=settings.tiktok_browser_launch_timeout_ms)
-                    context = await browser.new_context()
-                    page = await context.new_page()
-                    try:
-                        await page.goto("https://www.tiktok.com", wait_until="commit", timeout=settings.tiktok_navigation_timeout_ms)
-                        await asyncio.sleep(2)
-                        cookies = await context.cookies()
-                        for cookie in cookies:
-                            if cookie["name"] == "msToken":
-                                ms_token = cookie["value"]
-                                break
-                    finally:
-                        await context.close()
-                        await browser.close()
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True, timeout=settings.tiktok_browser_launch_timeout_ms)
+                context = await browser.new_context()
+                page = await context.new_page()
+                try:
+                    await page.goto("https://www.tiktok.com", wait_until="commit", timeout=settings.tiktok_navigation_timeout_ms)
+                    await asyncio.sleep(2)
+                    cookies = await context.cookies()
+                    for cookie in cookies:
+                        if cookie["name"] == "msToken":
+                            ms_token = cookie["value"]
+                            break
+                finally:
+                    await context.close()
+                    await browser.close()
         except Exception:
             pass
         return ms_token
 
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception):
-        import traceback
-        traceback.print_exc()
+        import logging
+        import uuid
+        req_id = str(uuid.uuid4())
+        logging.error(f"[{req_id}] request_path={request.url.path} stable_error_code=INTERNAL_ERROR")
         if isinstance(exc, HTTPException):
             return JSONResponse(
                 status_code=exc.status_code,
@@ -122,17 +130,17 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
         
         async def perform_sync():
             nonlocal ms_token
-            if not ms_token:
-                ms_token = await acquire_ephemeral_ms_token()
-                
-            if not ms_token:
-                return JSONResponse(status_code=200, content={
-                    "status": "fallback_required",
-                    "code": "TIKTOK_BOOKMARK_REQUIRED",
-                    "message": "Automatic TikTok connection is unavailable."
-                })
-
             async with browser_semaphore:
+                if not ms_token:
+                    ms_token = await acquire_ephemeral_ms_token()
+                    
+                if not ms_token:
+                    return JSONResponse(status_code=200, content={
+                        "status": "fallback_required",
+                        "code": "TIKTOK_BOOKMARK_REQUIRED",
+                        "message": "Automatic TikTok connection is unavailable."
+                    })
+
                 async with TikTokApi() as api:
                     await api.create_sessions(
                         ms_tokens=[ms_token],
@@ -169,9 +177,9 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
                     normalized_videos = []
                     try:
                         videos = []
-                        async for video in user.videos(count=30):
+                        async for video in user.videos(count=settings.tiktok_profile_video_count):
                             videos.append(video.as_dict)
-                            if len(videos) >= 30:
+                            if len(videos) >= settings.tiktok_profile_video_count:
                                 break
                                 
                         for v in videos:
